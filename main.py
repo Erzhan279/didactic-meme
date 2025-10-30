@@ -172,9 +172,18 @@ async def ask_gemini(prompt: str) -> str:
 # --- Keyboard ---
 main_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton("📄 Шаблондар"), KeyboardButton("➕ Шаблон қосу")],
-        [KeyboardButton("📆 Апта жоспары"), KeyboardButton("✉️ Хабар тарату (admin)")],
-        [KeyboardButton("🧠 Сұрақ қою (Gemini)"), KeyboardButton("🛠️ Баптаулар")],
+        [
+            KeyboardButton(text="📄 Шаблондар"),
+            KeyboardButton(text="➕ Шаблон қосу")
+        ],
+        [
+            KeyboardButton(text="📆 Апта жоспары"),
+            KeyboardButton(text="✉️ Хабар тарату (admin)")
+        ],
+        [
+            KeyboardButton(text="🧠 Сұрақ қою (Gemini)"),
+            KeyboardButton(text="🛠️ Баптаулар")
+        ],
     ],
     resize_keyboard=True
 )
