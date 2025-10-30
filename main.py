@@ -10,21 +10,23 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
-from aiohttp import web  # 🟢 Веб-сервер үшін
+from aiohttp import web  # ✅ Web server үшін
 
+# --- Gemini ---
 try:
     from google import genai
     GEMINI_AVAILABLE = True
 except Exception:
     GEMINI_AVAILABLE = False
 
+# --- Config ---
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 MAIN_BOT_TOKEN = os.getenv("MAIN_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-PORT = int(os.environ.get("PORT", 8080))  # Render порт үшін міндетті
+PORT = int(os.environ.get("PORT", 10000))  # ✅ Render міндетті PORT
 
 if not MAIN_BOT_TOKEN:
     raise SystemExit("❌ MAIN_BOT_TOKEN орнатылмаған.")
@@ -32,7 +34,6 @@ if not MAIN_BOT_TOKEN:
 bot = Bot(token=MAIN_BOT_TOKEN)
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
-
 DB_PATH = "manybot_kz.db"
 
 # --- FSM States ---
@@ -63,8 +64,10 @@ init_db()
 def add_template(user_id, title, content):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("INSERT INTO templates (user_id, title, content, created_at) VALUES (?, ?, ?, ?)",
-                (user_id, title, content, datetime.utcnow().isoformat()))
+    cur.execute(
+        "INSERT INTO templates (user_id, title, content, created_at) VALUES (?, ?, ?, ?)",
+        (user_id, title, content, datetime.utcnow().isoformat()),
+    )
     conn.commit()
     conn.close()
 
@@ -86,7 +89,7 @@ genai_client = init_genai_client()
 
 async def ask_gemini(prompt: str) -> str:
     if not genai_client:
-        return "❌ Gemini клиенті табылмады."
+        return "⚠️ Gemini клиенті табылмады."
     try:
         response = genai_client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
         return getattr(response, "text", str(response))
@@ -146,9 +149,9 @@ async def gemini_ask(message: types.Message, state: FSMContext):
     await message.answer(response, reply_markup=main_kb)
     await state.clear()
 
-# --- Health Check Server (Render үшін порт ашу) ---
+# --- Health Check Web Server ---
 async def handle_root(request):
-    return web.Response(text="✅ Bot is running!")
+    return web.Response(text="✅ Bot is running on Render!")
 
 async def start_web_server():
     app = web.Application()
@@ -162,8 +165,11 @@ async def start_web_server():
 # --- MAIN ---
 async def main():
     scheduler.start()
-    await start_web_server()  # 🟢 Render-ге порт ашамыз
-    await dp.start_polling(bot)
+    # 🟢 Бір уақытта polling және web server қатар іске қосылады
+    await asyncio.gather(
+        start_web_server(),
+        dp.start_polling(bot)
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
