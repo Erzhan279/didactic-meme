@@ -3,15 +3,12 @@ import logging
 import sqlite3
 import asyncio
 from datetime import datetime
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command, Text
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 
-# Gemini client (Google)
-# Қажет болса: from google import genai   (pip package name may differ)
-# Мұнда генай интерфейсін REST-тен немесе ресми пакеттің мысалынан қолдануға болады.
 try:
     from google import genai
     GEMINI_AVAILABLE = True
@@ -19,7 +16,6 @@ except Exception:
     GEMINI_AVAILABLE = False
 
 load_dotenv()
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -33,7 +29,6 @@ if not MAIN_BOT_TOKEN:
 bot = Bot(token=MAIN_BOT_TOKEN)
 dp = Dispatcher()
 
-# --- SQLite қарапайым дерекқор (тұрақты) ---
 DB_PATH = "manybot_kz.db"
 
 def init_db():
@@ -69,12 +64,14 @@ def init_db():
 
 init_db()
 
-# --- Көмекші функциялар ---
+# --- Helper functions ---
 def add_template_db(user_id: int, title: str, content: str):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("INSERT INTO templates (user_id, title, content, created_at) VALUES (?, ?, ?, ?)",
-                (user_id, title, content, datetime.utcnow().isoformat()))
+    cur.execute(
+        "INSERT INTO templates (user_id, title, content, created_at) VALUES (?, ?, ?, ?)",
+        (user_id, title, content, datetime.utcnow().isoformat()),
+    )
     conn.commit()
     conn.close()
 
@@ -89,8 +86,10 @@ def list_templates_db(user_id: int):
 def add_schedule_db(user_id:int, title:str, content:str, cron_expr:str):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("INSERT INTO schedules (user_id, title, content, cron, created_at) VALUES (?, ?, ?, ?, ?)",
-                (user_id, title, content, cron_expr, datetime.utcnow().isoformat()))
+    cur.execute(
+        "INSERT INTO schedules (user_id, title, content, cron, created_at) VALUES (?, ?, ?, ?, ?)",
+        (user_id, title, content, cron_expr, datetime.utcnow().isoformat()),
+    )
     conn.commit()
     conn.close()
 
@@ -111,7 +110,6 @@ def is_admin(user_id:int):
     return ok
 
 def ensure_admin(user_id:int):
-    # for initial testing, make the deployer admin by env var
     ADMIN_ID = os.getenv("ADMIN_ID")
     if ADMIN_ID and int(ADMIN_ID) == user_id:
         conn = sqlite3.connect(DB_PATH)
@@ -130,20 +128,17 @@ async def send_scheduled_message(chat_id: int, text: str):
         logger.error("Жіберу қатесі: %s", e)
 
 def schedule_job(job_id: str, cron_expr: str, chat_id: int, text: str):
-    # Қарапайым cron_expr құрастыру: "day-of-week hour minute" мысалы: "mon 09 00"
-    # Бұл мысал үшін біз күн мен уақытты оқып, күнделікті/апталық жоспарлауды жеңілдетеміз.
-    # Сыныптау: cron_expr = "weekly:MON:09:00" немесе "daily:09:00"
     parts = cron_expr.split(":")
     if parts[0] == "daily":
-        time_part = parts[1]  # HH:MM
-        hour, minute = map(int, time_part.split(":"))
+        hour, minute = map(int, parts[1].split(":"))
         scheduler.add_job(lambda: asyncio.create_task(send_scheduled_message(chat_id, text)),
                           'cron', hour=hour, minute=minute, id=job_id, replace_existing=True)
     elif parts[0] == "weekly":
         _, weekday, time_part = parts
         hour, minute = map(int, time_part.split(":"))
         scheduler.add_job(lambda: asyncio.create_task(send_scheduled_message(chat_id, text)),
-                          'cron', day_of_week=weekday.lower(), hour=hour, minute=minute, id=job_id, replace_existing=True)
+                          'cron', day_of_week=weekday.lower(), hour=hour, minute=minute,
+                          id=job_id, replace_existing=True)
     else:
         logger.warning("Белгісіз cron түрі: %s", cron_expr)
 
@@ -161,27 +156,20 @@ def init_genai_client():
 genai_client = init_genai_client()
 
 async def ask_gemini(prompt: str) -> str:
-    """
-    Gemini-пен сұрау жасайды. Мұнда қарапайым generate_content мысалы көрсетілген.
-    Егер ресми клиент болмаса REST шақыру арқылы да жасауға болады.
-    """
     if not genai_client:
         return "Кешіріңіз, Gemini клиенті конфигурацияланбаған."
     try:
-        # generate_content мысалы: model атауын жобада өзгертуге болады
         response = genai_client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt
         )
-        # response.text немесе response.result болуы мүмкін; клиент нұсқасына байланысты
-        # Қауіпсіздік үшін .text тексерейік
         text = getattr(response, "text", None) or str(response)
         return text
     except Exception as e:
         logger.exception("Gemini қате: %s", e)
         return "Gemini-ден жауап алу кезінде қате пайда болды."
 
-# --- Бастапқы мәзір (қазақша) ---
+# --- Keyboard ---
 main_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton("📄 Шаблондар"), KeyboardButton("➕ Шаблон қосу")],
@@ -191,18 +179,16 @@ main_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# --- Хендлерлер ---
-@dp.message(Command(commands=["start"]))
+# --- Handlers ---
+@dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     ensure_admin(message.from_user.id)
-    text = (
-        "Сәлем! 🇰🇿\n"
-        "Бұл — қазақша Manybot прототипі.\n\n"
-        "Мәзірден таңдаңыз немесе /help деп жазыңыз."
+    await message.answer(
+        "Сәлем! 🇰🇿\nБұл — қазақша Manybot прототипі.\n\nМәзірден таңдаңыз немесе /help деп жазыңыз.",
+        reply_markup=main_kb
     )
-    await message.answer(text, reply_markup=main_kb)
 
-@dp.message(Command(commands=["help"]))
+@dp.message(Command("help"))
 async def cmd_help(message: types.Message):
     await message.answer(
         "Қол жетімді командалар:\n"
@@ -213,7 +199,7 @@ async def cmd_help(message: types.Message):
         "/ask — GPT (Gemini) көмегі\n"
     )
 
-@dp.message(Text(equals="📄 Шаблондар"))
+@dp.message(F.text == "📄 Шаблондар")
 async def show_templates(message: types.Message):
     rows = list_templates_db(message.from_user.id)
     if not rows:
@@ -224,7 +210,7 @@ async def show_templates(message: types.Message):
         text += f"ID:{r[0]} — {r[1]}\n{r[2]}\n\n"
     await message.answer(text)
 
-@dp.message(Text(equals="➕ Шаблон қосу"))
+@dp.message(F.text == "➕ Шаблон қосу")
 async def start_add_template(message: types.Message):
     await message.answer("Шаблон атауын енгізіңіз (мысалы: 'Жаңа өнім')\nТоқтатқыңыз келсе /cancel деп жазыңыз.")
     await dp.current_state(user=message.from_user.id).set_state("TEMPLATE_TITLE")
@@ -248,19 +234,17 @@ async def input_template_content(message: types.Message):
     await message.answer("✅ Шаблон сақталды.", reply_markup=main_kb)
     await dp.current_state(user=message.from_user.id).clear()
 
-@dp.message(Text(equals="📆 Апта жоспары"))
+@dp.message(F.text == "📆 Апта жоспары")
 async def cmd_week_plan(message: types.Message):
     await message.answer(
         "Апталық жоспар қосу: /addschedule\n"
         "Бар жоспарларды көру: /schedules\n\n"
-        "Пішім мысалы (апталық):\n"
-        "/addschedule weekly:mon:09:00\n"
-        "Содан кейін ботаңыздан мәтінді жібересіз."
+        "Мысалы:\n/addschedule weekly:mon:09:00\n"
+        "Содан кейін мәтінді жібересіз."
     )
 
-@dp.message(Command(commands=["addschedule"]))
+@dp.message(Command("addschedule"))
 async def cmd_add_schedule(message: types.Message):
-    # мәтіннен cron-ті алу: команда форматында хабарлама: /addschedule weekly:mon:09:00
     args = message.get_args()
     if not args:
         await message.answer("Қолдану: /addschedule weekly:mon:09:00 немесе /addschedule daily:09:00")
@@ -275,13 +259,12 @@ async def save_schedule_text(message: types.Message):
     cron = data.get("cron")
     text = message.text
     add_schedule_db(message.from_user.id, f"Жоспар {cron}", text, cron)
-    # scheduler-ге қосу
     job_id = f"{message.from_user.id}_{int(datetime.utcnow().timestamp())}"
     schedule_job(job_id, cron, message.chat.id, text)
     await message.answer("✅ Апталық жоспар сақталды және жоспарланды.", reply_markup=main_kb)
     await dp.current_state(user=message.from_user.id).clear()
 
-@dp.message(Command(commands=["schedules"]))
+@dp.message(Command("schedules"))
 async def cmd_list_schedules(message: types.Message):
     rows = list_schedules_db(message.from_user.id)
     if not rows:
@@ -292,7 +275,7 @@ async def cmd_list_schedules(message: types.Message):
         text += f"ID:{r[0]} — {r[1]}\n{r[2]}\nCron: {r[3]}\n\n"
     await message.answer(text)
 
-@dp.message(Text(equals="🧠 Сұрақ қою (Gemini)"))
+@dp.message(F.text == "🧠 Сұрақ қою (Gemini)")
 async def ask_menu(message: types.Message):
     await message.answer("Сұрағыңызды жазыңыз (немесе /cancel):")
     await dp.current_state(user=message.from_user.id).set_state("GEMINI_ASK")
@@ -300,37 +283,20 @@ async def ask_menu(message: types.Message):
 @dp.message(state="GEMINI_ASK")
 async def handle_gemini_ask(message: types.Message):
     if message.text == "/cancel":
-        await message.answer("Отмена.", reply_markup=main_kb)
+        await message.answer("Әрекет тоқтатылды.", reply_markup=main_kb)
         await dp.current_state(user=message.from_user.id).clear()
         return
-    prompt = f"Пайдаланушы сұрағы (қазақша): {message.text}\nЖауап қазақстанша қысқаша әрі түсінікті етіп бер."
-    answer = await asyncio.get_event_loop().run_in_executor(None, lambda: asyncio.run(ask_gemini(prompt)) if False else ask_gemini_sync(prompt))
-    # жоғарыдағы жол клиент нұсқасына қарай шақырылады; төменде ask_gemini_sync анықталған
+    prompt = f"Пайдаланушы сұрағы: {message.text}\nЖауапты қысқаша әрі қазақша бер."
+    answer = await ask_gemini(prompt)
     await message.answer(f"🧠 Gemini жауап:\n\n{answer}", reply_markup=main_kb)
     await dp.current_state(user=message.from_user.id).clear()
 
-# ---------- Қарапайым синхронды жүгіртпе (кейбір ортада genai.sync жұмыс істемеуі мүмкін)
-def ask_gemini_sync(prompt: str) -> str:
-    if not genai_client:
-        return "Gemini қолжетімсіз."
-    try:
-        response = genai_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
-        text = getattr(response, "text", None) or str(response)
-        return text
-    except Exception as e:
-        logger.exception("Gemini sync қате: %s", e)
-        return "Gemini жауап беруде қате."
-
-# --- Админға арналған broadcast командасы (жөн ғана мысал) ---
-@dp.message(Text(equals="✉️ Хабар тарату (admin)"))
+@dp.message(F.text == "✉️ Хабар тарату (admin)")
 async def admin_broadcast_menu(message: types.Message):
     if not is_admin(message.from_user.id):
         await message.answer("Сіз админ емессіз.")
         return
-    await message.answer("Жіберілетін мәтінді енгізіңіз (барлық сақталған чаттарға):")
+    await message.answer("Жіберілетін мәтінді енгізіңіз:")
     await dp.current_state(user=message.from_user.id).set_state("BROADCAST_TEXT")
 
 @dp.message(state="BROADCAST_TEXT")
@@ -340,20 +306,15 @@ async def handle_broadcast(message: types.Message):
         await dp.current_state(user=message.from_user.id).clear()
         return
     text = message.text
-    # Қарапайым: broadcast тек осы боттың сақталған жоспар/chat-теріне жібереді.
-    # Әрі қарай сіз пайдаланушылар тізімін сақтауыңыз керек.
-    # Мұнда тек мысал ретінде өзіңе жібереміз.
     await bot.send_message(message.from_user.id, f"Сіз жібердіңіз:\n\n{text}")
-    await message.answer("✅ Хабар жіберілді (жергілікті тест).", reply_markup=main_kb)
+    await message.answer("✅ Хабар жіберілді.", reply_markup=main_kb)
     await dp.current_state(user=message.from_user.id).clear()
 
-# --- Cancel universal handler ---
-@dp.message(Command(commands=["cancel"]))
+@dp.message(Command("cancel"))
 async def cmd_cancel(message: types.Message):
     await dp.current_state(user=message.from_user.id).clear()
     await message.answer("Әрекет тоқтатылды.", reply_markup=main_kb)
 
-# --- Қызметтік: scheduler жүктеу DB-ден ---
 def load_schedules_from_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -362,10 +323,8 @@ def load_schedules_from_db():
     conn.close()
     for r in rows:
         job_id = f"db_{r[0]}"
-        # chat_id ретінде біз user_id-ды пайдаланамыз — қажет болса чат id сақтау керек
         schedule_job(job_id, r[4], r[1], r[3])
 
-# --- Ботты іске қосу ---
 async def main():
     load_schedules_from_db()
     scheduler.start()
