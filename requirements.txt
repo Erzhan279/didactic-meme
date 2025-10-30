@@ -1,0 +1,5 @@
+aiogram==3.0.0b7
+aiohttp
+apscheduler==3.10.1
+python-dotenv
+google-genai==0.2.2   # немесе ресми клиенттың соңғы нұсқасы (pip-тен тексер)
