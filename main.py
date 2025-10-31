@@ -15,6 +15,9 @@ from typing import Optional, Dict, Any, List
 from flask import Flask, request, jsonify
 import requests
 
+# Flask серверін бастаймыз (МІНДЕТТІ)
+app = Flask(__name__)
+
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def webhook():
     update = request.get_json(force=True)
@@ -24,7 +27,7 @@ def webhook():
     try:
         asyncio.run(dp.feed_update(bot, types.Update(**update)))
     except Exception as e:
-        print("❌ Error handling update:",e)
+        print("❌ Error handling update:", e)
         return jsonify({"ok": False}), 500
 
     return jsonify({"ok": True})
@@ -32,7 +35,6 @@ def webhook():
 # firebase admin
 import firebase_admin
 from firebase_admin import credentials, db
-
 # crypto for token encryption
 from cryptography.fernet import Fernet, InvalidToken
 
