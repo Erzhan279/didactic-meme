@@ -3,4 +3,3 @@ aiohttp
 python-dotenv
 apscheduler
 cryptography==41.0.3
-google-genai
