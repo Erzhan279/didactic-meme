@@ -261,7 +261,18 @@ if __name__ == "__main__":
         logger.info(f"🌐 Webhook listening on port {PORT}")
         await dp.start_polling(bot)
 
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+    from aiohttp import web
+
+async def handle(request):
+    return web.Response(text="Бот жұмыс істеп тұр ✅")
+
+app = web.Application()
+app.add_routes([web.post(f"/{BOT_TOKEN}", handle), web.get("/", handle)])
+
+if __name__ == "__main__":
+    import asyncio
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    logging.info("🌐 Webhook listening on Render...")
+
+    web.run_app(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
