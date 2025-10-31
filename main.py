@@ -1,11 +1,9 @@
-# main.py
+# main.py (түзетілген, толық нұсқа)
 import os
 import logging
 import sqlite3
 import asyncio
-import base64
 from datetime import datetime
-from typing import Optional, Dict, Any
 
 from aiohttp import web
 from dotenv import load_dotenv
@@ -61,7 +59,6 @@ DB_PATH = "manybot_kz.db"
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    # bots: bots that users added to the platform (encrypted token)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS bots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,7 +70,6 @@ def init_db():
         created_at TEXT
     )
     """)
-    # subscribers: per bot subscribers (chat_id means user id who subscribed to that bot)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS subscribers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,7 +78,6 @@ def init_db():
         joined_at TEXT
     )
     """)
-    # templates
     cur.execute("""
     CREATE TABLE IF NOT EXISTS templates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,7 +87,6 @@ def init_db():
         created_at TEXT
     )
     """)
-    # bot_info (main Manybot info)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS bot_info (
         id INTEGER PRIMARY KEY,
@@ -100,7 +94,6 @@ def init_db():
         lang TEXT DEFAULT 'kk'
     )
     """)
-    # admins for Manybot
     cur.execute("""
     CREATE TABLE IF NOT EXISTS admins (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -244,6 +237,8 @@ async def ask_gemini(prompt: str) -> str:
 # --------------- FSM states ---------------
 class Form(StatesGroup):
     AWAIT_TOKEN = State()
+    TEMPLATE_TITLE = State()
+    TEMPLATE_CONTENT = State()
     CHOOSE_BOT_FOR_POST = State()
     BROADCAST_TEXT = State()
     DESCRIPTION = State()
@@ -260,7 +255,6 @@ main_kb = ReplyKeyboardMarkup(
 # --------------- Bot handlers (Manybot) ---------------
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
-    # Just greet and store user in subscribers table? We will only store subscribers to individual bots
     await message.answer("Сәлем! 🇰🇿 Manybot-қа қош келдіңіз.\n/help деп жазып функцияларды көре аласыз.", reply_markup=main_kb)
 
 @dp.message(Command("help"))
@@ -275,6 +269,8 @@ async def cmd_help(message: types.Message):
         "/bots — өзіңіз қосқан боттарды көру\n"
         "/deletebot <bot_db_id> — ботты өшіру\n"
         "/admins — админдерді басқару\n"
+        "/templates — шаблондар\n"
+        "/addtemplate — шаблон қосу\n"
         "/help — осы көмек\n"
         "/cancel — ағымдағы әрекетті тоқтату"
     )
@@ -283,14 +279,13 @@ async def cmd_help(message: types.Message):
 async def cmd_addbot(message: types.Message):
     await message.answer(
         "Жаңа бот қосу үшін BotFather арқылы бот жасаңыз да, алған токенді жеке чатта мына команда арқылы жіберіңіз:\n\n"
-        "`/token <BOT_TOKEN>`\n\n"
-        "Ескерту: токенді қауіпсіз сақтаймыз (шифрланған).", parse_mode="Markdown"
+        "/token <BOT_TOKEN>\n\n"
+        "Ескерту: токенді қауіпсіз сақтаймыз (шифрланған)."
     )
     await Form.AWAIT_TOKEN.set()
 
 @dp.message(F.text.startswith("/token "))
-async def cmd_token_raw(message: types.Message, state: FSMContext):
-    # Accept only in private chat
+async def cmd_token_raw(message: types.Message):
     if message.chat.type != "private":
         await message.answer("Токенді тек жеке чатта жіберіңіз.")
         return
@@ -301,33 +296,28 @@ async def cmd_token_raw(message: types.Message, state: FSMContext):
 
     await message.answer("Токенді тексеріп жатырмын...")
 
-    # try to init temporary bot with that token
     try:
         temp_bot = Bot(token=token)
         me = await temp_bot.get_me()
-        # close session of temp_bot to free resources
         await temp_bot.session.close()
     except Exception as e:
         logger.exception("Token validation error: %s", e)
         await message.answer("Токен жарамсыз немесе Telegram қол жетімсіз.")
         return
 
-    # Save to DB encrypted
     bot_db_id = save_bot(message.from_user.id, me.id, me.username or "", token)
-    # set webhook for that user bot to our server: WEBHOOK_BASE_URL + webhook_path
-    webhook_path = f"{WEBHOOK_BASE_URL}/u/{message.from_user.id}_{me.id}"
-    # set webhook using token
+
+    webhook_url = f"{WEBHOOK_BASE_URL}/u/{message.from_user.id}_{me.id}"
     try:
         user_bot = Bot(token=token)
-        await user_bot.set_webhook(webhook_path)
+        await user_bot.set_webhook(webhook_url)
         await user_bot.session.close()
     except Exception as e:
         logger.exception("Failed to set webhook for user bot: %s", e)
-        # even if webhook setting failed, keep bot saved so user can use send methods
         await message.answer("Бот қосылды, бірақ webhook орнату мүмкін болмады (кейін қолмен тексеріңіз).")
         return
 
-    await message.answer(f"✅ Бот қосылды: @{me.username} (id={bot_db_id})\nWebhook орнатылды.")
+    await message.answer(f"✅ Бот қосылды: @{me.username} (DB_ID={bot_db_id})\nWebhook орнатылды.")
 
 @dp.message(Command("bots"))
 async def cmd_list_bots(message: types.Message):
@@ -342,7 +332,6 @@ async def cmd_list_bots(message: types.Message):
 
 @dp.message(Command("deletebot"))
 async def cmd_deletebot(message: types.Message):
-    # /deletebot <bot_db_id>
     args = message.get_args()
     if not args:
         await message.answer("Қолдану: /deletebot <bot_db_id>\nАлдымен /bots арқылы ID табыңыз.")
@@ -359,7 +348,6 @@ async def cmd_deletebot(message: types.Message):
     if row[1] != message.from_user.id and not is_admin(message.from_user.id):
         await message.answer("Сіз бұл боттың иесі емессіз.")
         return
-    # try to remove webhook from that bot (best-effort)
     enc = row[4]
     try:
         token = decrypt_token(enc)
@@ -390,59 +378,50 @@ async def cmd_subscribers(message: types.Message):
 
 # Broadcast: choose bot then message
 @dp.message(Command("newpost"))
-async def cmd_newpost_start(message: types.Message):
+async def cmd_newpost_start(message: types.Message, state: FSMContext):
     rows = get_bots_by_owner(message.from_user.id)
     if not rows:
         await message.answer("Сізде боттар жоқ. /addbot арқылы қосыңыз.")
         return
     if len(rows) == 1:
-        # single bot: go ahead
+        await state.update_data(chosen_bot=rows[0][0])
         await message.answer("Мәтінді жазыңыз, ол боттың барлық жазылушыларына таратылады.")
-        # save chosen bot id in FSM
-        await dp.current_state(user=message.from_user.id).update_data(chosen_bot=rows[0][0])
         await Form.BROADCAST_TEXT.set()
         return
-    # multiple — present options
     text = "Қай боттан таратасыз? DB_ID санын жазыңыз:\n\n"
     for r in rows:
         text += f"DB_ID:{r[0]} — @{r[2]}\n"
     await message.answer(text)
-    await dp.current_state(user=message.from_user.id).set_state(Form.BROADCAST_TEXT)  # reuse state; expect '<id>\n<message>' pattern or two-step
+    await Form.BROADCAST_TEXT.set()
 
 @dp.message(Form.BROADCAST_TEXT)
 async def cmd_newpost_send(message: types.Message, state: FSMContext):
     data = await state.get_data()
     if "chosen_bot" not in data:
-        # expecting first message to be bot id or "id: message"
-        text = message.text.strip()
-        parts = text.split("\n", 1)
+        txt = message.text.strip()
+        parts = txt.split("\n", 1)
         first = parts[0].strip()
-        # if first is number -> select bot and ask for message
         if first.isdigit() and len(parts) == 1:
             bot_db_id = int(first)
             row = get_bot(bot_db_id)
-            if not row or row[1] != message.from_user.id and not is_admin(message.from_user.id):
+            if not row or (row[1] != message.from_user.id and not is_admin(message.from_user.id)):
                 await message.answer("Қате ID немесе сізге тиесілі емес бот.")
                 await state.clear()
                 return
             await state.update_data(chosen_bot=bot_db_id)
             await message.answer("Енді тарату мәтінін жіберіңіз:")
             return
-        # if user sent 'id\nmessage' in one go
         if first.isdigit() and len(parts) == 2:
             bot_db_id = int(first)
-            # proceed
             msg_text = parts[1].strip()
             row = get_bot(bot_db_id)
-            if not row or row[1] != message.from_user.id and not is_admin(message.from_user.id):
+            if not row or (row[1] != message.from_user.id and not is_admin(message.from_user.id)):
                 await message.answer("Қате ID немесе сізге тиесілі емес бот.")
                 await state.clear()
                 return
-            # send broadcasts
             await _broadcast_to_bot(bot_db_id, msg_text, message)
             await state.clear()
             return
-        # else: ambiguous
         await message.answer("Ботты таңдамайсыз ба? Алдымен /bots арқылы ID қарап, бірінші жолға ID жазыңыз, екінші жолда мәтін.")
         await state.clear()
         return
@@ -478,7 +457,7 @@ async def _broadcast_to_bot(bot_db_id: int, text: str, reply_message: types.Mess
     await user_bot.session.close()
     await reply_message.answer(f"✅ {sent} адамға хабар жіберілді.")
 
-# Add admin management
+# Admin management
 @dp.message(Command("admins"))
 async def cmd_admins(message: types.Message):
     if not is_admin(message.from_user.id):
@@ -527,6 +506,7 @@ async def cmd_listadmins(message: types.Message):
         return
     await message.answer("Админдер:\n" + "\n".join(str(r[0]) for r in rows))
 
+# Templates listing and adding
 @dp.message(Command("templates"))
 async def cmd_templates(message: types.Message):
     conn = sqlite3.connect(DB_PATH)
@@ -543,37 +523,48 @@ async def cmd_templates(message: types.Message):
 @dp.message(Command("addtemplate"))
 async def cmd_addtemplate_start(message: types.Message, state: FSMContext):
     await message.answer("Шаблон атауын енгізіңіз:")
-    await state.set_state(Form.AWAIT_TOKEN)  # reuse a simple state for temp
-    await dp.current_state(user=message.from_user.id).update_data(template_step="title")
+    await state.set_state(Form.TEMPLATE_TITLE)
 
+@dp.message(Form.TEMPLATE_TITLE)
+async def handle_template_title(message: types.Message, state: FSMContext):
+    await state.update_data(template_title=message.text)
+    await message.answer("Енді шаблон мәтінін енгізіңіз:")
+    await state.set_state(Form.TEMPLATE_CONTENT)
+
+@dp.message(Form.TEMPLATE_CONTENT)
+async def handle_template_content(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    title = data.get("template_title", "Без названия")
+    content = message.text
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO templates (owner_user_id, title, content, created_at) VALUES (?, ?, ?, ?)",
+                (message.from_user.id, title, content, datetime.utcnow().isoformat()))
+    conn.commit()
+    conn.close()
+    await message.answer("✅ Шаблон сақталды.", reply_markup=main_kb)
+    await state.clear()
+
+# Catch-all for unknown commands/messages (keeps quiet)
 @dp.message(lambda message: True)
-async def catch_all(message: types.Message):
-    # A simple fallback to help users - keep succinct
-    # If not in any FSM, ignore or guide
-    state = dp.current_state(user=message.from_user.id)
+async def catch_all(message: types.Message, state: FSMContext):
     st = await state.get_state()
     if st is None:
-        # not in FSM
-        # minimal autoprompt
         txt = message.text.strip().lower()
         if txt.startswith("/"):
-            # unknown command
             await message.answer("Түсінілмейтін команда. /help деп көріңіз.")
-            return
-        # otherwise ignore silently or reply:
+        # otherwise do nothing
         return
+    # If in state but no matching handler, gently notify
+    await message.answer("Қазір сіз ағымдағы әрекетте тұрсыз. /cancel деп тоқтатыңыз.")
 
 # --------------- Web server / webhook for user bots ---------------
-# This endpoint receives updates from user bots (we set webhook to WEBHOOK_BASE_URL + webhook_path)
 async def user_bot_webhook(request):
-    # path like /u/{owner}_{botid}
     try:
         payload = await request.json()
     except Exception:
         return web.Response(status=400)
-    # get webhook path to map to bot row
-    path = request.path
-    # find bot by webhook_path
+    path = request.path  # '/u/{owner}_{botid}'
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT id, encrypted_token FROM bots WHERE webhook_path=?", (path,))
@@ -588,20 +579,15 @@ async def user_bot_webhook(request):
     except Exception:
         logger.exception("Decrypt token failed for webhook.")
         return web.Response(status=500)
-    # create Bot instance and handle update
     user_bot = Bot(token=token)
     try:
-        # feed update to aiogram Dispatcher? Simpler: handle basic subscribe command for user bot
-        # we parse simple messages: if user sends '/start' to user bot -> add subscriber
         update = payload
-        # if message present and text == /start => add subscriber
         if "message" in update:
             msg = update["message"]
             chat_id = msg.get("chat", {}).get("id")
             text = msg.get("text", "")
             if isinstance(text, str) and text.strip().lower().startswith("/start"):
                 add_subscriber_for_bot(bot_db_id, chat_id)
-                # send welcome via user_bot
                 await user_bot.send_message(chat_id, "Сіз сол ботқа жазылдыңыз. Қош келдіңіз!")
     except Exception:
         logger.exception("Error handling webhook update.")
@@ -609,42 +595,37 @@ async def user_bot_webhook(request):
         await user_bot.session.close()
     return web.Response(status=200)
 
-# Health and root
+# Root health
 async def handle_root(request):
     return web.Response(text="✅ Manybot running")
 
-# --------------- App startup/shutdown ---------------
+# Startup/shutdown
 async def on_startup(app):
-    logger.info("App startup: main webhook not needed for Manybot (we use web endpoints).")
+    logger.info("App startup: Manybot starting.")
 
 async def on_shutdown(app):
     logger.info("Shutting down: closing main bot session.")
     await bot.session.close()
 
-# --------------- App runner ---------------
 def create_app():
     app = web.Application()
     app.router.add_get("/", handle_root)
-    # endpoint for user bot webhooks: /u/{owner}_{botid}
     app.router.add_post(r"/u/{owner_bot}", user_bot_webhook)
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
     return app
 
-# --------------- Run ---------------
+# Run
 if __name__ == "__main__":
     app = create_app()
-    # Note: we still need to set webhook for MAIN_BOT if we want; currently Manybot uses polling commands with aiogram Dispatcher
-    # But since we're running an aiohttp app, we should run both the aiohttp server and aiogram polling concurrently.
+
     async def _main():
-        # start web server
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", PORT)
         await site.start()
         logger.info(f"Web server started on port {PORT}")
-        # start aiogram polling for Manybot admin interactions
-        # run polling in background
+        # Run aiogram polling (note: if you use webhook for main bot, switch to webhook mode)
         await dp.start_polling(bot)
 
     try:
