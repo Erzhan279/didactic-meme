@@ -252,30 +252,41 @@ def create_app():
 # -------- RUN --------
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
+import asyncio, logging, os
 
-bot = Bot(token=os.getenv("BOT_TOKEN"))
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "8005464032:AAGTBZ99oB9pcF0VeEjDGn20LgRWzHN25T4"
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ✅ Telegram webhook-тен жаңарту қабылдау
-async def handle_webhook(request: web.Request):
+routes = web.RouteTableDef()
+
+@routes.get("/")
+async def home(request):
+    return web.Response(text="✅ Bot Webhook Server is running!")
+
+@routes.post(f"/{BOT_TOKEN}")
+async def webhook(request):
     try:
-        data = await request.json()  # <-- JSON дерегін оқу
-        update = types.Update.model_validate(data)  # <-- Telegram Update ретінде тексеру
-        await dp.feed_update(bot, update)  # <-- Aiogram-ға беру
+        data = await request.json()
+        update = types.Update(**data)
+        await dp.feed_update(bot, update)
+        return web.Response(status=200)
     except Exception as e:
-        logging.exception(f"Webhook қатесі: {e}")
+        logging.error(f"Webhook error: {e}")
         return web.Response(status=500)
-    return web.Response(status=200)
 
-# ✅ Render health check
-async def handle_root(request):
-    return web.Response(text="Бот жұмыс істеп тұр ✅")
-
-# ✅ Aiohttp қосымшасы
-app = web.Application()
-app.router.add_post(f"/{os.getenv('BOT_TOKEN')}", handle_webhook)
-app.router.add_get("/", handle_root)
+async def main():
+    app = web.Application()
+    app.add_routes(routes)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 10000)
+    await site.start()
+    logging.info("🌐 Webhook listening on port 10000")
+    await bot.delete_webhook()
+    await bot.set_webhook(f"https://didactic-meme.onrender.com/{BOT_TOKEN}")
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    logging.info("🌐 Webhook listening on Render...")
-    web.run_app(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    logging.basicConfig(level=logging.INFO)
+    asyncio.run(main())
