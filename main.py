@@ -1,141 +1,267 @@
+# main.py — Firebase-нұсқа, токендер Render-де, secret GitHub-та
 import os
 import json
-import telebot
-from flask import Flask, request
+import asyncio
+import logging
+from datetime import datetime
+
 import firebase_admin
 from firebase_admin import credentials, db
+from aiohttp import web
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 
-# === 🔐 Telegram токеніңді осында жаз немесе Render Environment-тен ал
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8005464032:AAGTBZ99oB9pcF0VeEjDGn20LgRWzHN25T4")
-bot = telebot.TeleBot(BOT_TOKEN)
-app = Flask(__name__)
+# ---------------- LOGGING ----------------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# === Firebase орнату ===
+# ---------------- CONFIG ----------------
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")
+PORT = int(os.getenv("PORT", 10000))
+
+if not BOT_TOKEN or not WEBHOOK_BASE_URL:
+    raise SystemExit("⚠️ BOT_TOKEN және WEBHOOK_BASE_URL орнатылмаған.")
+
+# ---------------- FIREBASE INIT ----------------
 def initialize_firebase():
+    """firebase_secret.json GitHub реподан оқиды"""
     try:
-        print("🔄 Firebase қосылып жатыр...")
-
-        firebase_json = os.getenv("FIREBASE_SECRET")
-
-        if not firebase_json and os.path.exists("firebase_secret.json"):
+        if os.path.exists("firebase_secret.json"):
             with open("firebase_secret.json", "r") as f:
-                firebase_json = f.read()
+                creds = json.load(f)
+        else:
+            raise FileNotFoundError("firebase_secret.json табылмады")
 
-        if not firebase_json:
-            print("🚫 Firebase secret табылмады!")
-            return None, None
-
-        creds_dict = json.loads(firebase_json)
-        cred = credentials.Certificate(creds_dict)
+        cred = credentials.Certificate(creds)
         firebase_admin.initialize_app(cred, {
             "databaseURL": "https://manybot-kz-default-rtdb.firebaseio.com/"
         })
-        print("✅ Firebase сәтті қосылды!")
-        users_ref = db.reference("users")
-        bots_ref = db.reference("user_bots")
-        return users_ref, bots_ref
+        logger.info("✅ Firebase сәтті қосылды")
     except Exception as e:
-        print(f"🚫 Firebase қатесі: {e}")
-        return None, None
+        raise SystemExit(f"🚫 Firebase қатесі: {e}")
 
+initialize_firebase()
 
-USERS_REF, BOTS_REF = initialize_firebase()
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
 
+# ---------------- FSM ----------------
+class Form(StatesGroup):
+    AWAIT_TOKEN = State()
+    BROADCAST = State()
 
-# === Telegram командалары ===
+# ---------------- MAIN MENU ----------------
+main_kb = types.ReplyKeyboardMarkup(
+    keyboard=[
+        [types.KeyboardButton("➕ Бот қосу"), types.KeyboardButton("📢 Хабар тарату")],
+        [types.KeyboardButton("👥 Жазылушылар"), types.KeyboardButton("ℹ️ Көмек")],
+    ],
+    resize_keyboard=True
+)
 
-@bot.message_handler(commands=['start'])
-def start(message):
-    text = (
-        "👋 Сәлем, *{0}*!\n\n"
-        "Мен — ManyBot KZ 🤖\n"
-        "Мен арқылы өзіңнің Telegram ботыңды оңай құра аласың!\n\n"
-        "Бастау үшін мәзірден таңда:\n"
-        "➡️ /newbot — жаңа бот қосу\n"
-        "➡️ /mybots — менің боттарым\n"
-        "➡️ /help — көмек нұсқаулығы"
-    ).format(message.from_user.first_name)
-    bot.send_message(message.chat.id, text, parse_mode="Markdown")
-
-    if USERS_REF:
-        USERS_REF.child(str(message.chat.id)).set({
-            "username": message.from_user.username,
-            "first_name": message.from_user.first_name
-        })
-
-
-@bot.message_handler(commands=['help'])
-def help_cmd(message):
-    bot.send_message(
-        message.chat.id,
-        "ℹ️ *Көмек*\n\n"
-        "1️⃣ /newbot — жаңа бот қосу.\n"
-        "2️⃣ /mybots — тіркелген боттарыңды көру.\n"
-        "3️⃣ /broadcast — барлық қолданушыға хабарлама жіберу (админге).\n\n"
-        "Бот токеніңді BotFather-ден алып, осы ботқа жібер.",
+# ---------------- HANDLERS ----------------
+@dp.message(Command("start"))
+async def start(message: types.Message):
+    await message.answer(
+        "Сәлем 👋 Бұл 🇰🇿 *Manybot KZ!*\n\n"
+        "Бот жасау және жазылушыларға хабар тарату үшін:\n"
+        "/addbot — жаңа бот қосу\n"
+        "/newpost — хабар тарату\n"
+        "/subscribers — жазылушылар саны\n"
+        "/help — көмек",
+        reply_markup=main_kb,
         parse_mode="Markdown"
     )
 
+@dp.message(Command("help"))
+async def help(message: types.Message):
+    await message.answer(
+        "🧭 Командалар:\n"
+        "/addbot — жаңа бот қосу\n"
+        "/token <TOKEN> — токен жіберу\n"
+        "/newpost — хабар тарату\n"
+        "/subscribers — жазылушылар саны\n"
+        "/deletebot <id> — ботты өшіру\n"
+        "/bots — өз боттарыңды көру\n"
+        "/help — көмек"
+    )
 
-@bot.message_handler(commands=['newbot'])
-def newbot(message):
-    msg = bot.send_message(message.chat.id, "🤖 Боттың *токенін* жіберіңіз:", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, save_new_bot)
+# -------- ADD BOT --------
+@dp.message(Command("addbot"))
+async def addbot(message: types.Message):
+    await message.answer("Жаңа бот қосу үшін /token <ТВОЙ_ТОКЕН> деп жаз.")
+    await Form.AWAIT_TOKEN.set()
 
-
-def save_new_bot(message):
-    token = message.text.strip()
-    if not token.startswith(""):
-        bot.reply_to(message, "⚠️ Қате токен. Қайта тексеріп көрші.")
+@dp.message(F.text.startswith("/token "))
+async def token_add(message: types.Message, state: FSMContext):
+    token = message.text.split(" ", 1)[1].strip()
+    if ":" not in token:
+        await message.answer("⚠️ Токен дұрыс емес форматта.")
         return
 
-    if BOTS_REF:
-        BOTS_REF.child(str(message.chat.id)).push({"token": token})
-        bot.reply_to(message, "✅ Жаңа бот сәтті қосылды!\nЕнді /mybots командасын қолдан.")
+    await message.answer("Токен тексерілуде...")
 
-
-@bot.message_handler(commands=['mybots'])
-def my_bots(message):
-    if not BOTS_REF:
-        bot.reply_to(message, "🚫 Firebase байланысы жоқ.")
-        return
-
-    user_bots = BOTS_REF.child(str(message.chat.id)).get()
-    if not user_bots:
-        bot.reply_to(message, "Сенде әлі боттар жоқ. /newbot командасын қолдан.")
-        return
-
-    text = "🤖 *Сенің боттарың:*\n\n"
-    for _, bot_data in user_bots.items():
-        text += f"🔹 `{bot_data['token']}`\n"
-    bot.send_message(message.chat.id, text, parse_mode="Markdown")
-
-
-# === Фондағы хабарламалар ===
-
-@bot.message_handler(func=lambda message: True)
-def echo_all(message):
-    bot.send_message(message.chat.id, f"💬 {message.text}")
-
-
-# === Flask маршруттары ===
-
-@app.route("/", methods=["GET"])
-def index():
-    return "✅ ManyBot KZ жұмыс істеп тұр!"
-
-
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def webhook():
     try:
-        json_update = request.get_json(force=True)
-        update = telebot.types.Update.de_json(json_update)
-        bot.process_new_updates([update])
-        return "OK", 200
+        tmp_bot = Bot(token=token)
+        me = await tmp_bot.get_me()
+        await tmp_bot.session.close()
+    except Exception:
+        await message.answer("❌ Токен жарамсыз.")
+        return
+
+    ref = db.reference("bots").push({
+        "owner": message.from_user.id,
+        "bot_id": me.id,
+        "username": me.username,
+        "token": token,
+        "created_at": datetime.utcnow().isoformat()
+    })
+
+    webhook_url = f"{WEBHOOK_BASE_URL}/u/{message.from_user.id}_{me.id}"
+
+    try:
+        user_bot = Bot(token=token)
+        await user_bot.set_webhook(webhook_url)
+        await user_bot.session.close()
     except Exception as e:
-        print(f"⚠️ Webhook қатесі: {e}")
-        return "Error", 500
+        logger.error(f"Webhook қатесі: {e}")
 
+    await message.answer(f"✅ @{me.username} қосылды!\nWebhook: {webhook_url}")
+    await state.clear()
 
+# -------- MY BOTS --------
+@dp.message(Command("bots"))
+async def list_bots(message: types.Message):
+    all_bots = db.reference("bots").get() or {}
+    my_bots = [b for b in all_bots.items() if b[1]["owner"] == message.from_user.id]
+    if not my_bots:
+        await message.answer("Сізде бот жоқ.")
+        return
+    text = "\n".join([f"@{b[1]['username']} — {b[0]}" for b in my_bots])
+    await message.answer(f"🧩 Сіздің боттарыңыз:\n\n{text}")
+
+# -------- DELETE BOT --------
+@dp.message(Command("deletebot"))
+async def delete_bot(message: types.Message):
+    args = message.get_args()
+    if not args:
+        await message.answer("Қолдану: /deletebot <id>")
+        return
+    bot_id = args.strip()
+    ref = db.reference(f"bots/{bot_id}")
+    data = ref.get()
+    if not data:
+        await message.answer("Бот табылмады.")
+        return
+    if data["owner"] != message.from_user.id:
+        await message.answer("Бұл бот сізге тиесілі емес.")
+        return
+    ref.delete()
+    await message.answer("✅ Бот өшірілді.")
+
+# -------- NEW POST --------
+@dp.message(Command("newpost"))
+async def newpost(message: types.Message, state: FSMContext):
+    all_bots = db.reference("bots").get() or {}
+    my_bots = [b for b in all_bots.items() if b[1]["owner"] == message.from_user.id]
+    if not my_bots:
+        await message.answer("Сізде бот жоқ.")
+        return
+    text = "Қай боттан жібереміз?\n\n"
+    for b in my_bots:
+        text += f"{b[1]['username']} — ID: {b[0]}\n"
+    await message.answer(text)
+    await Form.BROADCAST.set()
+
+@dp.message(Form.BROADCAST)
+async def broadcast_msg(message: types.Message, state: FSMContext):
+    lines = message.text.split("\n", 1)
+    if len(lines) < 2:
+        await message.answer("Алдымен бот ID, сосын хабар мәтінін жазыңыз:\n<id>\n<мәтін>")
+        return
+    bot_id, text = lines[0].strip(), lines[1].strip()
+    bot_data = db.reference(f"bots/{bot_id}").get()
+    if not bot_data:
+        await message.answer("Бот табылмады.")
+        return
+    if bot_data["owner"] != message.from_user.id:
+        await message.answer("Бұл бот сізге тиесілі емес.")
+        return
+    user_bot = Bot(token=bot_data["token"])
+    subs = db.reference(f"subscribers/{bot_id}").get() or {}
+    sent = 0
+    for uid in subs.keys():
+        try:
+            await user_bot.send_message(uid, text)
+            sent += 1
+        except:
+            pass
+    await user_bot.session.close()
+    await message.answer(f"✅ {sent} адамға хабар жіберілді.")
+    await state.clear()
+
+# -------- SUBSCRIBERS --------
+@dp.message(Command("subscribers"))
+async def subscribers(message: types.Message):
+    subs = db.reference("subscribers").get() or {}
+    total = sum(len(v) for v in subs.values())
+    await message.answer(f"Барлығы: {total} жазылушы.")
+
+# -------- WEBHOOK (user bots) --------
+async def user_bot_webhook(request):
+    payload = await request.json()
+    path = request.path.split("/u/")[-1]
+    if "_" not in path:
+        return web.Response(status=400)
+    owner_id, botid = path.split("_")
+    bots = db.reference("bots").get() or {}
+    found = None
+    for key, data in bots.items():
+        if str(data["bot_id"]) == botid:
+            found = (key, data)
+            break
+    if not found:
+        return web.Response(status=404)
+    bot_key, bot_data = found
+    user_bot = Bot(token=bot_data["token"])
+    try:
+        msg = payload.get("message", {})
+        chat_id = msg.get("chat", {}).get("id")
+        text = msg.get("text", "")
+        if text and text.startswith("/start"):
+            db.reference(f"subscribers/{bot_key}/{chat_id}").set(True)
+            await user_bot.send_message(chat_id, "Сәлем! Сіз жазылдыңыз ✅")
+    finally:
+        await user_bot.session.close()
+    return web.Response(status=200)
+
+# -------- ROOT --------
+async def root(request):
+    return web.Response(text="✅ Manybot Firebase version is running")
+
+# -------- APP --------
+def create_app():
+    app = web.Application()
+    app.router.add_get("/", root)
+    app.router.add_post("/u/{owner_bot}", user_bot_webhook)
+    return app
+
+# -------- RUN --------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    app = create_app()
+
+    async def main():
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", PORT)
+        await site.start()
+        logger.info(f"🌐 Webhook listening on port {PORT}")
+        await dp.start_polling(bot)
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
