@@ -1,16 +1,13 @@
 services:
   - type: web
-    name: botzhasau
+    name: manybot-kz
     env: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn main:app
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn main:app"
     envVars:
-      - key: PORT
-        value: 10000
-      - key: GOOGLE_APPLICATION_CREDENTIALS
-        value: firebase_secret.json
-      - key: GEMINI_API_KEY
+      - key: BOT_TOKEN
         sync: false
-      - key: TELEGRAM_BOT_TOKEN
+      - key: FIREBASE_SECRET
+        sync: false
+      - key: WEBHOOK_URL
         sync: false
