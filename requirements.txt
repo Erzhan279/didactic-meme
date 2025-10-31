@@ -1,5 +1,5 @@
-aiogram==3.12.0
-requests==2.32.3
-python-dotenv==1.0.1
-apscheduler==3.10.4
-google-generativeai==0.8.2
+aiogram==3.0.0b7
+aiohttp
+python-dotenv
+apscheduler
+cryptography
