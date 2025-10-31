@@ -142,4 +142,4 @@ if __name__ == "__main__":
         print(f"✅ Webhook орнатылды: {WEBHOOK_URL}/{BOT_TOKEN}")
     else:
         print("⚠️ WEBHOOK_URL орнатылмаған!")
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))х
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
