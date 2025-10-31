@@ -57,7 +57,7 @@ class Form(StatesGroup):
 main_kb = types.ReplyKeyboardMarkup(
     keyboard=[
         [types.KeyboardButton(text="➕ Бот қосу"), types.KeyboardButton(text="📢 Хабар тарату")],
-        [types.KeyboardButton("👥 Жазылушылар"), types.KeyboardButton("ℹ️ Көмек")],
+        [types.KeyboardButton(text="👥 Жазылушылар"), types.KeyboardButton(text="ℹ️ Көмек")],
     ],
     resize_keyboard=True
 )
