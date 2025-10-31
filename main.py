@@ -1,3 +1,6 @@
+from firebase_utils import initialize_firebase
+
+USERS_REF, MEMORY_REF = initialize_firebase()
 from flask import Flask, request
 import requests, threading, os, json, time
 from firebase_utils import initialize_firebase
