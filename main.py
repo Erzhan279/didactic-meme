@@ -404,16 +404,22 @@ def delete_webhook_for_token(token: str) -> Dict[str, Any]:
 # If you deploy and want setWebhook for main bot automatically, call setWebhook_for_main_bot()
 
 @app.route("/", methods=["GET"])
-def index():
-    return "🎬 ManyBot KZ — Flask + Firebase ready"
+def root():
+    return "✅ Bot is running"
+
+app = Flask(__name__)
 
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def main_bot_webhook():
-    """Handle main bot updates (users interacting with ManyBot)"""
+def webhook():
+    update = request.get_json(force=True)
+    if not update:
+        return jsonify({"ok": False}), 400
     try:
-        update = request.get_json(force=True)
-    except Exception:
-        return jsonify({"ok": False, "error": "invalid-json"}), 400
+        asyncio.run(dp.feed_update(bot, types.Update(**update)))
+    except Exception as e:
+        print("❌ Error handling update:", e)
+        return jsonify({"ok": False}), 500
+    return jsonify({"ok": True})
 
     # only handle messages
     message = update.get("message") or update.get("edited_message")
