@@ -250,17 +250,32 @@ def create_app():
     return app
 
 # -------- RUN --------
-if __name__ == "__main__":
-    import asyncio
-    async def main():
-        app = create_app()
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", PORT)
-        await site.start()
-        await bot.set_webhook(f"{WEBHOOK_BASE_URL}/{BOT_TOKEN}")
-        logger.info(f"🌐 Webhook listening on port {PORT}")
-        while True:
-            await asyncio.sleep(3600)  # keep alive loop
+from aiohttp import web
+from aiogram import Bot, Dispatcher, types
 
-    asyncio.run(main())
+bot = Bot(token=os.getenv("BOT_TOKEN"))
+dp = Dispatcher()
+
+# ✅ Telegram webhook-тен жаңарту қабылдау
+async def handle_webhook(request: web.Request):
+    try:
+        data = await request.json()  # <-- JSON дерегін оқу
+        update = types.Update.model_validate(data)  # <-- Telegram Update ретінде тексеру
+        await dp.feed_update(bot, update)  # <-- Aiogram-ға беру
+    except Exception as e:
+        logging.exception(f"Webhook қатесі: {e}")
+        return web.Response(status=500)
+    return web.Response(status=200)
+
+# ✅ Render health check
+async def handle_root(request):
+    return web.Response(text="Бот жұмыс істеп тұр ✅")
+
+# ✅ Aiohttp қосымшасы
+app = web.Application()
+app.router.add_post(f"/{os.getenv('BOT_TOKEN')}", handle_webhook)
+app.router.add_get("/", handle_root)
+
+if __name__ == "__main__":
+    logging.info("🌐 Webhook listening on Render...")
+    web.run_app(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
