@@ -1,5 +1,5 @@
 aiogram==3.0.0b7
-aiohttp==3.9.5
+aiohttp==3.8.6
 python-dotenv
 apscheduler
 cryptography
