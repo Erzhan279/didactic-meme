@@ -5,19 +5,19 @@ from flask import Flask, request
 import firebase_admin
 from firebase_admin import credentials, db
 
-# ======================================================
-# 🔥 Firebase инициализациясы
-# ======================================================
+# === 🔐 Telegram токеніңді осында жаз немесе Render Environment-тен ал
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8005464032:AAGTBZ99oB9pcF0VeEjDGn20LgRWzHN25T4")
+bot = telebot.TeleBot(BOT_TOKEN)
+app = Flask(__name__)
 
+# === Firebase орнату ===
 def initialize_firebase():
     try:
-        print("🔄 Firebase байланысын тексеру...")
+        print("🔄 Firebase қосылып жатыр...")
 
         firebase_json = os.getenv("FIREBASE_SECRET")
 
-        # Егер Render ENV ішінде жоқ болса — GitHub реподан оқимыз
         if not firebase_json and os.path.exists("firebase_secret.json"):
-            print("📁 Firebase файлдан оқылуда...")
             with open("firebase_secret.json", "r") as f:
                 firebase_json = f.read()
 
@@ -27,119 +27,115 @@ def initialize_firebase():
 
         creds_dict = json.loads(firebase_json)
         cred = credentials.Certificate(creds_dict)
-
         firebase_admin.initialize_app(cred, {
             "databaseURL": "https://manybot-kz-default-rtdb.firebaseio.com/"
         })
-
         print("✅ Firebase сәтті қосылды!")
         users_ref = db.reference("users")
-        memory_ref = db.reference("memory")
-        return users_ref, memory_ref
-
+        bots_ref = db.reference("user_bots")
+        return users_ref, bots_ref
     except Exception as e:
         print(f"🚫 Firebase қатесі: {e}")
         return None, None
 
-USERS_REF, MEMORY_REF = initialize_firebase()
 
-# ======================================================
-# 🤖 Telegram Bot конфигурациясы
-# ======================================================
+USERS_REF, BOTS_REF = initialize_firebase()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-if not BOT_TOKEN:
-    print("🚫 BOT_TOKEN табылмады!")
-else:
-    bot = telebot.TeleBot(BOT_TOKEN)
+# === Telegram командалары ===
 
-app = Flask(__name__)
-
-# ======================================================
-# 🧠 Командалар тізімі
-# ======================================================
-
-@bot.message_handler(commands=["start"])
-def start_cmd(message):
-    user_id = str(message.from_user.id)
-    username = message.from_user.username or "Аты жоқ"
+@bot.message_handler(commands=['start'])
+def start(message):
+    text = (
+        "👋 Сәлем, *{0}*!\n\n"
+        "Мен — ManyBot KZ 🤖\n"
+        "Мен арқылы өзіңнің Telegram ботыңды оңай құра аласың!\n\n"
+        "Бастау үшін мәзірден таңда:\n"
+        "➡️ /newbot — жаңа бот қосу\n"
+        "➡️ /mybots — менің боттарым\n"
+        "➡️ /help — көмек нұсқаулығы"
+    ).format(message.from_user.first_name)
+    bot.send_message(message.chat.id, text, parse_mode="Markdown")
 
     if USERS_REF:
-        USERS_REF.child(user_id).set({
-            "username": username,
-            "id": user_id
+        USERS_REF.child(str(message.chat.id)).set({
+            "username": message.from_user.username,
+            "first_name": message.from_user.first_name
         })
-        bot.reply_to(message, f"Сәлем, @{username}! 👋\n\nБұл ManyBot 🇰🇿\nМен сенің жеке Telegram ботыңды жасауға көмектесемін!")
-    else:
-        bot.reply_to(message, "⚠️ Firebase байланысы орнатылмады!")
 
-@bot.message_handler(commands=["help"])
+
+@bot.message_handler(commands=['help'])
 def help_cmd(message):
-    text = (
-        "🧭 Командалар тізімі:\n\n"
-        "/start - Ботты бастау\n"
-        "/help - Көмек алу\n"
-        "/makebot - Жаңа бот жасау нұсқаулығы\n"
-        "/about - ManyBot туралы ақпарат"
+    bot.send_message(
+        message.chat.id,
+        "ℹ️ *Көмек*\n\n"
+        "1️⃣ /newbot — жаңа бот қосу.\n"
+        "2️⃣ /mybots — тіркелген боттарыңды көру.\n"
+        "3️⃣ /broadcast — барлық қолданушыға хабарлама жіберу (админге).\n\n"
+        "Бот токеніңді BotFather-ден алып, осы ботқа жібер.",
+        parse_mode="Markdown"
     )
-    bot.reply_to(message, text)
 
-@bot.message_handler(commands=["makebot"])
-def makebot_cmd(message):
-    text = (
-        "🤖 Өз ботыңды жасау үшін:\n"
-        "1️⃣ @BotFather аш.\n"
-        "2️⃣ /newbot деп жаз.\n"
-        "3️⃣ Атың мен логинін таңда.\n"
-        "4️⃣ Маған токеніңді жібер.\n\n"
-        "Мен сенің ботыңды іске қосып берем 🔥"
-    )
-    bot.reply_to(message, text)
 
-@bot.message_handler(commands=["about"])
-def about_cmd(message):
-    bot.reply_to(message, "🇰🇿 ManyBot KZ — Telegram бот жасауға арналған қазақша көмекші.\nҚұрастырған: *BotZhasau*", parse_mode="Markdown")
+@bot.message_handler(commands=['newbot'])
+def newbot(message):
+    msg = bot.send_message(message.chat.id, "🤖 Боттың *токенін* жіберіңіз:", parse_mode="Markdown")
+    bot.register_next_step_handler(msg, save_new_bot)
 
-# ======================================================
-# 📩 Токен қабылдау (бот жасау)
-# ======================================================
 
-@bot.message_handler(func=lambda msg: "token" in msg.text.lower())
-def handle_token(message):
+def save_new_bot(message):
     token = message.text.strip()
-    user_id = str(message.from_user.id)
+    if not token.startswith(""):
+        bot.reply_to(message, "⚠️ Қате токен. Қайта тексеріп көрші.")
+        return
 
-    if USERS_REF:
-        USERS_REF.child(user_id).update({"bot_token": token})
-        bot.reply_to(message, "✅ Токен сақталды! Енді мен сенің ботыңды іске қосамын 🚀")
-    else:
-        bot.reply_to(message, "⚠️ Firebase байланысы жоқ!")
+    if BOTS_REF:
+        BOTS_REF.child(str(message.chat.id)).push({"token": token})
+        bot.reply_to(message, "✅ Жаңа бот сәтті қосылды!\nЕнді /mybots командасын қолдан.")
 
-# ======================================================
-# 🌍 Flask маршруты (Webhook)
-# ======================================================
+
+@bot.message_handler(commands=['mybots'])
+def my_bots(message):
+    if not BOTS_REF:
+        bot.reply_to(message, "🚫 Firebase байланысы жоқ.")
+        return
+
+    user_bots = BOTS_REF.child(str(message.chat.id)).get()
+    if not user_bots:
+        bot.reply_to(message, "Сенде әлі боттар жоқ. /newbot командасын қолдан.")
+        return
+
+    text = "🤖 *Сенің боттарың:*\n\n"
+    for _, bot_data in user_bots.items():
+        text += f"🔹 `{bot_data['token']}`\n"
+    bot.send_message(message.chat.id, text, parse_mode="Markdown")
+
+
+# === Фондағы хабарламалар ===
+
+@bot.message_handler(func=lambda message: True)
+def echo_all(message):
+    bot.send_message(message.chat.id, f"💬 {message.text}")
+
+
+# === Flask маршруттары ===
 
 @app.route("/", methods=["GET"])
-def home():
-    return "🤖 ManyBot KZ жұмыс істеп тұр!"
+def index():
+    return "✅ ManyBot KZ жұмыс істеп тұр!"
+
 
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def webhook():
-    json_update = request.get_json()
-    bot.process_new_updates([telebot.types.Update.de_json(json_update)])
-    return "OK", 200
+    try:
+        json_update = request.get_json(force=True)
+        update = telebot.types.Update.de_json(json_update)
+        bot.process_new_updates([update])
+        return "OK", 200
+    except Exception as e:
+        print(f"⚠️ Webhook қатесі: {e}")
+        return "Error", 500
 
-# ======================================================
-# 🚀 Бағдарламаны іске қосу
-# ======================================================
 
 if __name__ == "__main__":
-    if WEBHOOK_URL:
-        bot.remove_webhook()
-        bot.set_webhook(url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
-        print(f"✅ Webhook орнатылды: {WEBHOOK_URL}/{BOT_TOKEN}")
-    else:
-        print("⚠️ WEBHOOK_URL орнатылмаған!")
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
