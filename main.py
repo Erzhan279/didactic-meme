@@ -1,7 +1,6 @@
-# main.py — Firebase-нұсқа, токендер Render-де, secret GitHub-та
+# main.py — Firebase-нұсқа, Render және GitHub интеграциясы бар
 import os
 import json
-import asyncio
 import logging
 from datetime import datetime
 
@@ -67,7 +66,7 @@ main_kb = types.ReplyKeyboardMarkup(
 async def start(message: types.Message):
     await message.answer(
         "Сәлем 👋 Бұл 🇰🇿 *Manybot KZ!*\n\n"
-        "Бот жасау және жазылушыларға хабар тарату үшін:\n"
+        "Бот жасау және хабар тарату үшін:\n"
         "/addbot — жаңа бот қосу\n"
         "/newpost — хабар тарату\n"
         "/subscribers — жазылушылар саны\n"
@@ -102,7 +101,7 @@ async def token_add(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Токен дұрыс емес форматта.")
         return
 
-    await message.answer("Токен тексерілуде...")
+    await message.answer("🔍 Токен тексерілуде...")
 
     try:
         tmp_bot = Bot(token=token)
@@ -129,7 +128,7 @@ async def token_add(message: types.Message, state: FSMContext):
     except Exception as e:
         logger.error(f"Webhook қатесі: {e}")
 
-    await message.answer(f"✅ @{me.username} қосылды!\nWebhook: {webhook_url}")
+    await message.answer(f"✅ @{me.username} қосылды!\n🌐 Webhook: {webhook_url}")
     await state.clear()
 
 # -------- MY BOTS --------
@@ -140,7 +139,7 @@ async def list_bots(message: types.Message):
     if not my_bots:
         await message.answer("Сізде бот жоқ.")
         return
-    text = "\n".join([f"@{b[1]['username']} — {b[0]}" for b in my_bots])
+    text = "\n".join([f"@{b[1]['username']} — ID: {b[0]}" for b in my_bots])
     await message.answer(f"🧩 Сіздің боттарыңыз:\n\n{text}")
 
 # -------- DELETE BOT --------
@@ -180,7 +179,7 @@ async def newpost(message: types.Message, state: FSMContext):
 async def broadcast_msg(message: types.Message, state: FSMContext):
     lines = message.text.split("\n", 1)
     if len(lines) < 2:
-        await message.answer("Алдымен бот ID, сосын хабар мәтінін жазыңыз:\n<id>\n<мәтін>")
+        await message.answer("Қолдану: <bot_id>\n<мәтін>")
         return
     bot_id, text = lines[0].strip(), lines[1].strip()
     bot_data = db.reference(f"bots/{bot_id}").get()
@@ -210,7 +209,7 @@ async def subscribers(message: types.Message):
     total = sum(len(v) for v in subs.values())
     await message.answer(f"Барлығы: {total} жазылушы.")
 
-# -------- WEBHOOK (user bots) --------
+# -------- USER BOT WEBHOOK --------
 async def user_bot_webhook(request):
     payload = await request.json()
     path = request.path.split("/u/")[-1]
@@ -240,9 +239,9 @@ async def user_bot_webhook(request):
 
 # -------- ROOT --------
 async def root(request):
-    return web.Response(text="✅ Manybot Firebase version is running")
+    return web.Response(text="✅ Manybot Firebase version is running on Render")
 
-# -------- APP --------
+# -------- WEB SERVER --------
 def create_app():
     app = web.Application()
     app.router.add_get("/", root)
@@ -251,28 +250,16 @@ def create_app():
 
 # -------- RUN --------
 if __name__ == "__main__":
-    app = create_app()
-
+    import asyncio
     async def main():
+        app = create_app()
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", PORT)
         await site.start()
         logger.info(f"🌐 Webhook listening on port {PORT}")
-        await dp.start_polling(bot)
+        # Webhook режимі — polling ЖОҚ
+        await bot.set_webhook(f"{WEBHOOK_BASE_URL}/{BOT_TOKEN}")
+        await dp.start_webhook(bot=bot, webhook_path=f"/{BOT_TOKEN}", on_startup=None)
 
-    from aiohttp import web
-
-async def handle(request):
-    return web.Response(text="Бот жұмыс істеп тұр ✅")
-
-app = web.Application()
-app.add_routes([web.post(f"/{BOT_TOKEN}", handle), web.get("/", handle)])
-
-if __name__ == "__main__":
-    import asyncio
-    import logging
-    logging.basicConfig(level=logging.INFO)
-    logging.info("🌐 Webhook listening on Render...")
-
-    web.run_app(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    asyncio.run(main())
