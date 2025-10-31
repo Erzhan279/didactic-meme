@@ -15,6 +15,20 @@ from typing import Optional, Dict, Any, List
 from flask import Flask, request, jsonify
 import requests
 
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    update = request.get_json(force=True)
+    if not update:
+        return jsonify({"ok": False}), 400
+
+    try:
+        asyncio.run(dp.feed_update(bot, types.Update(**update)))
+    except Exception as e:
+        print("❌ Error handling update:",e)
+        return jsonify({"ok": False}), 500
+
+    return jsonify({"ok": True})
+
 # firebase admin
 import firebase_admin
 from firebase_admin import credentials, db
@@ -709,5 +723,5 @@ threading.Thread(target=startup_tasks, daemon=True).start()
 
 # ----------------- Run Flask -----------------
 if __name__ == "__main__":
-    logger.info("ManyBot KZ starting... (Flask)")
-    app.run(host="0.0.0.0", port=PORT)
+    print("🌐 Webhook listening on port 10000")
+    app.run(host="0.0.0.0", port=10000)
