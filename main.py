@@ -1,4 +1,3 @@
-# main.py — Firebase-нұсқа, Render және GitHub интеграциясы бар
 import os
 import json
 import logging
@@ -44,6 +43,7 @@ def initialize_firebase():
 
 initialize_firebase()
 
+# ---------------- BOT INIT ----------------
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
@@ -90,11 +90,11 @@ async def help(message: types.Message):
 
 # -------- ADD BOT --------
 @dp.message(Command("addbot"))
-async def addbot(message: types.Message):
+async def addbot(message: types.Message, state: FSMContext):
     await message.answer("Жаңа бот қосу үшін /token <ТВОЙ_ТОКЕН> деп жаз.")
-    await Form.AWAIT_TOKEN.set()
+    await state.set_state(Form.AWAIT_TOKEN)
 
-@dp.message(F.text.startswith("/token "))
+@dp.message(Form.AWAIT_TOKEN, F.text.startswith("/token "))
 async def token_add(message: types.Message, state: FSMContext):
     token = message.text.split(" ", 1)[1].strip()
     if ":" not in token:
@@ -173,7 +173,7 @@ async def newpost(message: types.Message, state: FSMContext):
     for b in my_bots:
         text += f"{b[1]['username']} — ID: {b[0]}\n"
     await message.answer(text)
-    await Form.BROADCAST.set()
+    await state.set_state(Form.BROADCAST)
 
 @dp.message(Form.BROADCAST)
 async def broadcast_msg(message: types.Message, state: FSMContext):
@@ -239,12 +239,13 @@ async def user_bot_webhook(request):
 
 # -------- ROOT --------
 async def root(request):
-    return web.Response(text="✅ Manybot Firebase version is running on Render")
+    return web.Response(text="✅ Manybot Firebase version is running on Render (Aiogram 3)")
 
-# -------- WEB SERVER --------
+# -------- APP --------
 def create_app():
     app = web.Application()
     app.router.add_get("/", root)
+    app.router.add_post(f"/{BOT_TOKEN}", lambda req: dp.feed_webhook_update(bot, req))
     app.router.add_post("/u/{owner_bot}", user_bot_webhook)
     return app
 
@@ -257,9 +258,9 @@ if __name__ == "__main__":
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", PORT)
         await site.start()
-        logger.info(f"🌐 Webhook listening on port {PORT}")
-        # Webhook режимі — polling ЖОҚ
         await bot.set_webhook(f"{WEBHOOK_BASE_URL}/{BOT_TOKEN}")
-        await dp.start_webhook(bot=bot, webhook_path=f"/{BOT_TOKEN}", on_startup=None)
+        logger.info(f"🌐 Webhook listening on port {PORT}")
+        while True:
+            await asyncio.sleep(3600)  # keep alive loop
 
     asyncio.run(main())
