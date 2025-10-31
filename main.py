@@ -1,123 +1,145 @@
-from firebase_utils import initialize_firebase
+import os
+import json
+import telebot
+from flask import Flask, request
+import firebase_admin
+from firebase_admin import credentials, db
+
+# ======================================================
+# 🔥 Firebase инициализациясы
+# ======================================================
+
+def initialize_firebase():
+    try:
+        print("🔄 Firebase байланысын тексеру...")
+
+        firebase_json = os.getenv("FIREBASE_SECRET")
+
+        # Егер Render ENV ішінде жоқ болса — GitHub реподан оқимыз
+        if not firebase_json and os.path.exists("firebase_secret.json"):
+            print("📁 Firebase файлдан оқылуда...")
+            with open("firebase_secret.json", "r") as f:
+                firebase_json = f.read()
+
+        if not firebase_json:
+            print("🚫 Firebase secret табылмады!")
+            return None, None
+
+        creds_dict = json.loads(firebase_json)
+        cred = credentials.Certificate(creds_dict)
+
+        firebase_admin.initialize_app(cred, {
+            "databaseURL": "https://manybot-kz-default-rtdb.firebaseio.com/"
+        })
+
+        print("✅ Firebase сәтті қосылды!")
+        users_ref = db.reference("users")
+        memory_ref = db.reference("memory")
+        return users_ref, memory_ref
+
+    except Exception as e:
+        print(f"🚫 Firebase қатесі: {e}")
+        return None, None
 
 USERS_REF, MEMORY_REF = initialize_firebase()
-from flask import Flask, request
-import requests, threading, os, json, time
-from firebase_utils import initialize_firebase
+
+# ======================================================
+# 🤖 Telegram Bot конфигурациясы
+# ======================================================
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+
+if not BOT_TOKEN:
+    print("🚫 BOT_TOKEN табылмады!")
+else:
+    bot = telebot.TeleBot(BOT_TOKEN)
 
 app = Flask(__name__)
 
-# 🔐 Негізгі BotZhasau токен (өз Manybot-ың)
-BOT_TOKEN = "YOUR_MAIN_BOT_TOKEN"
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+# ======================================================
+# 🧠 Командалар тізімі
+# ======================================================
 
-# 🔥 Firebase қосу
-BOTS_REF, USERS_REF = initialize_firebase()
+@bot.message_handler(commands=["start"])
+def start_cmd(message):
+    user_id = str(message.from_user.id)
+    username = message.from_user.username or "Аты жоқ"
 
-# === 📤 Telegram хабар жіберу ===
-def send_message(chat_id, text, buttons=None):
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-    if buttons:
-        payload["reply_markup"] = {"keyboard": buttons, "resize_keyboard": True}
-    requests.post(f"{TELEGRAM_API}/sendMessage", json=payload)
+    if USERS_REF:
+        USERS_REF.child(user_id).set({
+            "username": username,
+            "id": user_id
+        })
+        bot.reply_to(message, f"Сәлем, @{username}! 👋\n\nБұл ManyBot 🇰🇿\nМен сенің жеке Telegram ботыңды жасауға көмектесемін!")
+    else:
+        bot.reply_to(message, "⚠️ Firebase байланысы орнатылмады!")
 
-# === 🌐 BotZhasau webhook ===
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def botzhasau_webhook():
-    data = request.get_json()
-    if not data or "message" not in data:
-        return "no message"
-
-    msg = data["message"]
-    chat_id = msg["chat"]["id"]
-    text = msg.get("text", "")
-
-    user_ref = USERS_REF.child(str(chat_id))
-    user_data = user_ref.get() or {}
-
-    # 🔹 1. Алғашқы старт
-    if text.lower() == "/start":
-        send_message(chat_id,
-            "🤖 <b>BotZhasau</b> жүйесіне қош келдің!\n\n"
-            "Бот жасау үшін маған өзіңнің Telegram BotFather токеніңді жібер ⤵️"
-        )
-        return "ok"
-
-    # 🔹 2. Егер токен форматта болса — тіркеу
-    if ":" in text and len(text) > 30:
-        user_ref.set({"token": text})
-        send_message(chat_id, "✅ Бот токен сақталды! Енді /add командасымен жауап орнат.")
-        return "ok"
-
-    # 🔹 3. Команда қосу
-    if text.lower().startswith("/add"):
-        parts = text.split(" ", 2)
-        if len(parts) < 3:
-            send_message(chat_id, "Формат: /add команда жауап")
-        else:
-            cmd, reply = parts[1], parts[2]
-            user_commands = user_data.get("commands", {})
-            user_commands[cmd] = reply
-            user_ref.update({"commands": user_commands})
-            send_message(chat_id, f"✅ Команда '{cmd}' сақталды!")
-        return "ok"
-
-    # 🔹 4. Бот тізімі
-    if text.lower() == "/mybot":
-        token = user_data.get("token")
-        if token:
-            send_message(chat_id, f"🤖 Сенің ботың:\n<code>{token}</code>")
-        else:
-            send_message(chat_id, "Бот тіркелмеген 😅")
-        return "ok"
-
-    send_message(chat_id, "ℹ️ Нұсқаулық:\n/start — бастау\n/add — команда қосу\n/mybot — токенді көру")
-    return "ok"
-
-# === 🌐 Пайдаланушы боттарының webhook-тары ===
-@app.route("/<token>", methods=["POST"])
-def user_bot_webhook(token):
-    data = request.get_json()
-    if not data or "message" not in data:
-        return "no message"
-
-    msg = data["message"]
-    chat_id = msg["chat"]["id"]
-    text = msg.get("text", "")
-
-    # 🔍 Firebase-тан бот иесін табу
-    all_users = USERS_REF.get() or {}
-    owner_id = None
-    commands = {}
-    for uid, info in all_users.items():
-        if info.get("token") == token:
-            owner_id = uid
-            commands = info.get("commands", {})
-            break
-
-    if not owner_id:
-        return "no owner"
-
-    # 🔹 Команда табу
-    for cmd, reply in commands.items():
-        if text.lower().startswith(cmd.lower()):
-            requests.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": reply}
-            )
-            return "ok"
-
-    # 🔹 Егер команда табылмаса
-    requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": "Менің ием бұл командаға жауап орнатпаған 😅"}
+@bot.message_handler(commands=["help"])
+def help_cmd(message):
+    text = (
+        "🧭 Командалар тізімі:\n\n"
+        "/start - Ботты бастау\n"
+        "/help - Көмек алу\n"
+        "/makebot - Жаңа бот жасау нұсқаулығы\n"
+        "/about - ManyBot туралы ақпарат"
     )
-    return "ok"
+    bot.reply_to(message, text)
 
-@app.route("/")
+@bot.message_handler(commands=["makebot"])
+def makebot_cmd(message):
+    text = (
+        "🤖 Өз ботыңды жасау үшін:\n"
+        "1️⃣ @BotFather аш.\n"
+        "2️⃣ /newbot деп жаз.\n"
+        "3️⃣ Атың мен логинін таңда.\n"
+        "4️⃣ Маған токеніңді жібер.\n\n"
+        "Мен сенің ботыңды іске қосып берем 🔥"
+    )
+    bot.reply_to(message, text)
+
+@bot.message_handler(commands=["about"])
+def about_cmd(message):
+    bot.reply_to(message, "🇰🇿 ManyBot KZ — Telegram бот жасауға арналған қазақша көмекші.\nҚұрастырған: *BotZhasau*", parse_mode="Markdown")
+
+# ======================================================
+# 📩 Токен қабылдау (бот жасау)
+# ======================================================
+
+@bot.message_handler(func=lambda msg: "token" in msg.text.lower())
+def handle_token(message):
+    token = message.text.strip()
+    user_id = str(message.from_user.id)
+
+    if USERS_REF:
+        USERS_REF.child(user_id).update({"bot_token": token})
+        bot.reply_to(message, "✅ Токен сақталды! Енді мен сенің ботыңды іске қосамын 🚀")
+    else:
+        bot.reply_to(message, "⚠️ Firebase байланысы жоқ!")
+
+# ======================================================
+# 🌍 Flask маршруты (Webhook)
+# ======================================================
+
+@app.route("/", methods=["GET"])
 def home():
-    return "🤖 BotZhasau Flask сервері жұмыс істеп тұр ✅"
+    return "🤖 ManyBot KZ жұмыс істеп тұр!"
+
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    json_update = request.get_json()
+    bot.process_new_updates([telebot.types.Update.de_json(json_update)])
+    return "OK", 200
+
+# ======================================================
+# 🚀 Бағдарламаны іске қосу
+# ======================================================
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    if WEBHOOK_URL:
+        bot.remove_webhook()
+        bot.set_webhook(url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
+        print(f"✅ Webhook орнатылды: {WEBHOOK_URL}/{BOT_TOKEN}")
+    else:
+        print("⚠️ WEBHOOK_URL орнатылмаған!")
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))х
