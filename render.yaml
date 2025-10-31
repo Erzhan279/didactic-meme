@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: botzhasau
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn main:app
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: firebase_secret.json
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
