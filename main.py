@@ -366,7 +366,6 @@ def main_bot_webhook():
     update = request.get_json(silent=True)
     if not update:
         return jsonify({"ok": False, "error": "invalid json"}), 400
-
     try:
     message = update.get("message") or update.get("edited_message") or {}
     logger.info(f"📨 Incoming message: {json.dumps(message, ensure_ascii=False)[:300]}")
