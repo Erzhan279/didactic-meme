@@ -369,6 +369,7 @@ def main_bot_webhook():
 
     try:
         message = update.get("message") or update.get("edited_message") or {}
+logger.info(f"📨 Incoming message: {json.dumps(message, ensure_ascii=False)[:300]}")
         if not message:
             return jsonify({"ok": True, "info": "no-message"})
 
@@ -696,8 +697,10 @@ try:
         set_main_webhook()
 except Exception:
     logger.exception("startup set_main_webhook error")
+    info = requests.get(telegram_api_url(BOT_TOKEN, "getWebhookInfo")).json()
+    logger.info(f"Webhook info: {json.dumps(info, ensure_ascii=False, indent=2)}")
 
 # ------------- Run Flask -------------
 if __name__ == "__main__":
     logger.info("ManyBot KZ starting (Flask). Port: %s", PORT)
-    app.run(host="0.0.0.0", port=PORT)
+    app.run(host="0.0.0.0", port=PORT, debug=True)
