@@ -2,14 +2,7 @@
 # coding: utf-8
 """
 ManyBot KZ - Flask + Firebase версиясы
-Функциялар:
- - Main bot webhook: /<BOT_TOKEN>  (ManyBot басты басқарушы боты)
- - User bot webhooks: /u/<owner>_<botid>
- - Командалар: /addbot, /token, /bots, /deletebot, /newpost, /subscribers,
-               /addtemplate, /templates, /addadmin, /removeadmin, /help
- - Firebase credentials: ENV FIREBASE_SECRET (JSON) немесе firebase_secret.json файл
- - Токендер шифрлау: опционалды MASTER_KEY (Fernet)
- - Локал fallback: local_db/*.json (егер Firebase қолжетімсіз болса)
+(түпнұсқа кодқа қосымша: /setdescription, /autoposting, /botlang, /admins, /lang командалары)
 """
 
 import os
@@ -182,6 +175,10 @@ def save_bot_record(owner: int, bot_id: int, username: str, token_plain: str) ->
         "bot_id": int(bot_id),
         "username": username or "",
         "token": (encrypt_token(token_plain) if fernet else token_plain),
+        # new optional fields with defaults
+        "description": "",
+        "autopost_enabled": False,
+        "bot_lang": "kk",  # default kazakh
         "created_at": int(time.time())
     }
     if FIREBASE_OK and BOTS_REF:
@@ -195,6 +192,21 @@ def save_bot_record(owner: int, bot_id: int, username: str, token_plain: str) ->
     d[k] = rec
     write_local("bots", d)
     return k
+
+def update_bot_field(key: str, field: str, value: Any):
+    """Update a single field for bot record in Firebase or local fallback."""
+    if FIREBASE_OK and BOTS_REF:
+        try:
+            BOTS_REF.child(key).update({field: value})
+            return True
+        except Exception:
+            logger.exception("Firebase update_bot_field failed, falling back to local.")
+    d = read_local("bots")
+    if key in d:
+        d[key][field] = value
+        write_local("bots", d)
+        return True
+    return False
 
 def get_all_bots() -> dict:
     if FIREBASE_OK and BOTS_REF:
@@ -330,6 +342,16 @@ def remove_admin(user_id: int):
         del d[str(user_id)]
         write_local("admins", d)
 
+def list_admins() -> List[int]:
+    if FIREBASE_OK and ADMINS_REF:
+        try:
+            d = ADMINS_REF.get() or {}
+            return [int(k) for k in d.keys()] if isinstance(d, dict) else []
+        except Exception:
+            logger.exception("Firebase list_admins failed")
+    d = read_local("admins")
+    return [int(k) for k, v in d.items() if v]
+
 # ----------------- encryption helpers ----------------
 def encrypt_token(plain: str) -> str:
     if not fernet:
@@ -352,6 +374,19 @@ def decrypt_token(enc: str) -> str:
         logger.exception("decrypt_token failed")
         raise
 
+# ----------------- user prefs (local) ----------------
+# store simple user preferences like language
+def set_user_pref(user_id: int, key: str, value: Any):
+    d = read_local("users")
+    if str(user_id) not in d:
+        d[str(user_id)] = {}
+    d[str(user_id)][key] = value
+    write_local("users", d)
+
+def get_user_pref(user_id: int, key: str, default=None):
+    d = read_local("users")
+    return d.get(str(user_id), {}).get(key, default)
+
 # ----------------- Flask app & routes -----------------
 app = Flask(__name__)
 
@@ -366,11 +401,13 @@ def main_bot_webhook():
     update = request.get_json(silent=True)
     if not update:
         return jsonify({"ok": False, "error": "invalid json"}), 400
+
     try:
         message = update.get("message") or update.get("edited_message") or {}
         logger.info(f"📨 Incoming message: {json.dumps(message, ensure_ascii=False)[:300]}")
-    except Exception as e:
-        logger.exception(f"⚠️ Қате пайда болды: {e}")
+
+        if not message:
+            return jsonify({"ok": True, "info": "no-message"})
 
         chat = message.get("chat", {})
         chat_id = chat.get("id")
@@ -388,9 +425,15 @@ def main_bot_webhook():
                 "/token <TOKEN> — BotFather-дан алынған токенді жіберу (тек жеке чат)\n"
                 "/bots — өз боттарың\n"
                 "/newpost — хабар тарату (ID + мәтін)\n"
+                "/setdescription — бот сипаттамасын орнату\n"
+                "/autoposting — autopost режимін қосу/өшіру\n"
+                "/botlang — боттың тілін орнату\n"
                 "/subscribers — жалпы жазылушылар саны\n"
                 "/templates — шаблондар\n"
                 "/addtemplate — шаблон қосу\n"
+                "/admins — админдер тізімі\n"
+                "/lang — өзіңнің тіл таңдауыңды орнату\n"
+                "/deletebot — ботты өшіру\n"
                 "/help — көмек\n"
             )
             if BOT_TOKEN:
@@ -406,7 +449,12 @@ def main_bot_webhook():
                 "/bots — өз боттарыңызды көру\n"
                 "/deletebot <DB_KEY> — ботты өшіру\n"
                 "/newpost — хабар тарату (бір хабарда: DB_KEY\\nМӘТІН)\n"
+                "/setdescription — бот сипаттамасын орнату (бір хабарда: /setdescription\\nDB_KEY\\nDESCRIPTION)\n"
+                "/autoposting — қосу/өшіру (бір хабарда: /autoposting\\nDB_KEY\\non|off)\n"
+                "/botlang — бот тілін орнату (мысалы: /botlang DB_KEY kk|ru|en)\n"
                 "/subscribers — жазылушылар саны\n"
+                "/admins — админдер тізімі (тізім көрсету)\n"
+                "/lang — өз тіл таңдауыңды орнату (мысалы: /lang kk)\n"
                 "/addtemplate — шаблон қосу (бір хабарда: /addtemplate\\nTITLE\\nCONTENT)\n"
                 "/templates — менің шаблондар\n"
             )
@@ -468,7 +516,7 @@ def main_bot_webhook():
                 return jsonify({"ok": True})
             out = "Сіздің боттарыңыз:\n\n"
             for k, v in my:
-                out += f"DB_KEY: <code>{k}</code>\n@{v.get('username','')}\n\n"
+                out += f"DB_KEY: <code>{k}</code>\n@{v.get('username','')}\nОписание: {v.get('description','')}\nАвто: {v.get('autopost_enabled', False)}\nЯзык: {v.get('bot_lang','kk')}\n\n"
             requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
                           json={"chat_id": chat_id, "text": out, "parse_mode": "HTML"}, timeout=8)
             return jsonify({"ok": True})
@@ -507,6 +555,130 @@ def main_bot_webhook():
             msg = "Хабар тарату үшін бір хабарда келесі форматты жіберіңіз:\n<DB_KEY>\n<мәтін>"
             requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
                           json={"chat_id": chat_id, "text": msg}, timeout=8)
+            return jsonify({"ok": True})
+
+        # /setdescription - set bot description
+        if text.startswith("/setdescription"):
+            # expected format: /setdescription\n<DB_KEY>\n<DESCRIPTION>
+            if "\n" in text:
+                parts = text.split("\n", 2)
+                if len(parts) >= 3:
+                    _, db_key, desc = parts
+                    rec = get_bot_by_key(db_key.strip())
+                    if not rec:
+                        requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                                      json={"chat_id": chat_id, "text": "DB_KEY табылмады."}, timeout=8)
+                        return jsonify({"ok": True})
+                    if int(rec.get("owner")) != int(user_id) and not is_admin(user_id):
+                        requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                                      json={"chat_id": chat_id, "text": "Сіз бұл боттың иесі емессіз."}, timeout=8)
+                        return jsonify({"ok": True})
+                    update_bot_field(db_key.strip(), "description", desc.strip())
+                    requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                                  json={"chat_id": chat_id, "text": "✅ Сипаттама сақталды."}, timeout=8)
+                    return jsonify({"ok": True})
+            # usage
+            requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                          json={"chat_id": chat_id, "text": "Қолдану:\n/setdescription\n<DB_KEY>\n<DESCRIPTION>"}, timeout=8)
+            return jsonify({"ok": True})
+
+        # /autoposting - enable/disable autopost for bot
+        if text.startswith("/autoposting"):
+            # expected format: /autoposting\n<DB_KEY>\n<on|off>
+            if "\n" in text:
+                parts = text.split("\n", 2)
+                if len(parts) >= 3:
+                    _, db_key, flag = parts
+                    flag = flag.strip().lower()
+                    rec = get_bot_by_key(db_key.strip())
+                    if not rec:
+                        requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                                      json={"chat_id": chat_id, "text": "DB_KEY табылмады."}, timeout=8)
+                        return jsonify({"ok": True})
+                    if int(rec.get("owner")) != int(user_id) and not is_admin(user_id):
+                        requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                                      json={"chat_id": chat_id, "text": "Сіз бұл боттың иесі емессіз."}, timeout=8)
+                        return jsonify({"ok": True})
+                    if flag in ("on", "enable", "true", "1"):
+                        update_bot_field(db_key.strip(), "autopost_enabled", True)
+                        requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                                      json={"chat_id": chat_id, "text": "✅ Autopost қосылды."}, timeout=8)
+                    elif flag in ("off", "disable", "false", "0"):
+                        update_bot_field(db_key.strip(), "autopost_enabled", False)
+                        requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                                      json={"chat_id": chat_id, "text": "✅ Autopost өшірілді."}, timeout=8)
+                    else:
+                        requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                                      json={"chat_id": chat_id, "text": "Қолдану: /autoposting\\n<DB_KEY>\\n<on|off>"}, timeout=8)
+                    return jsonify({"ok": True})
+            requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                          json={"chat_id": chat_id, "text": "Қолдану:\n/autoposting\n<DB_KEY>\n<on|off>"}, timeout=8)
+            return jsonify({"ok": True})
+
+        # /botlang - set per-bot language
+        if text.startswith("/botlang"):
+            # usage: /botlang <DB_KEY> <kk|ru|en>
+            parts = text.split()
+            if len(parts) >= 3:
+                db_key = parts[1].strip()
+                lang = parts[2].strip().lower()
+                if lang not in ("kk", "ru", "en"):
+                    requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                                  json={"chat_id": chat_id, "text": "Қолдау көрсетілетін тілдер: kk, ru, en."}, timeout=8)
+                    return jsonify({"ok": True})
+                rec = get_bot_by_key(db_key)
+                if not rec:
+                    requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                                  json={"chat_id": chat_id, "text": "DB_KEY табылмады."}, timeout=8)
+                    return jsonify({"ok": True})
+                if int(rec.get("owner")) != int(user_id) and not is_admin(user_id):
+                    requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                                  json={"chat_id": chat_id, "text": "Сіз бұл боттың иесі емессіз."}, timeout=8)
+                    return jsonify({"ok": True})
+                update_bot_field(db_key, "bot_lang", lang)
+                requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                              json={"chat_id": chat_id, "text": f"✅ Боттың тілі {lang} етіп орнатылды."}, timeout=8)
+                return jsonify({"ok": True})
+            # usage
+            requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                          json={"chat_id": chat_id, "text": "Қолдану: /botlang <DB_KEY> <kk|ru|en>"}, timeout=8)
+            return jsonify({"ok": True})
+
+        # /admins - list admins (only for admins or show limited)
+        if text.startswith("/admins"):
+            admins = list_admins()
+            if not admins:
+                text_out = "Админдер тізімі бос."
+            else:
+                text_out = "Админдер:\n" + "\n".join([str(a) for a in admins])
+            requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                          json={"chat_id": chat_id, "text": text_out}, timeout=8)
+            return jsonify({"ok": True})
+
+        # /lang - set user's preferred language for ManyBot responses
+        if text.startswith("/lang"):
+            parts = text.split()
+            if len(parts) >= 2:
+                lang = parts[1].strip().lower()
+                if lang not in ("kk", "ru", "en"):
+                    requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                                  json={"chat_id": chat_id, "text": "Қолдау көрсетілетін тілдер: kk, ru, en."}, timeout=8)
+                    return jsonify({"ok": True})
+                set_user_pref(user_id, "lang", lang)
+                requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                              json={"chat_id": chat_id, "text": f"✅ Тіліңіз {lang} етіп орнатылды."}, timeout=8)
+                return jsonify({"ok": True})
+            # show current
+            cur = get_user_pref(user_id, "lang", "kk")
+            requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                          json={"chat_id": chat_id, "text": f"Сіздің қазіргі тіліңіз: {cur}"}, timeout=8)
+            return jsonify({"ok": True})
+
+        # /subscribers count
+        if text.startswith("/subscribers"):
+            total = count_total_subscribers()
+            requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
+                          json={"chat_id": chat_id, "text": f"Барлығы: {total}"}, timeout=8)
             return jsonify({"ok": True})
 
         # Broadcast heuristic: message contains newline and first line looks like DB_KEY
@@ -569,7 +741,7 @@ def main_bot_webhook():
                               json={"chat_id": chat_id, "text": out[:4000]}, timeout=8)
             return jsonify({"ok": True})
 
-        # admin add/remove
+        # admin add/remove (existing)
         if text.startswith("/addadmin"):
             if not is_admin(user_id):
                 requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
@@ -610,18 +782,13 @@ def main_bot_webhook():
                               json={"chat_id": chat_id, "text": "Қате user_id."}, timeout=8)
             return jsonify({"ok": True})
 
-        # subscribers count
-        if text.startswith("/subscribers"):
-            total = count_total_subscribers()
-            requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
-                          json={"chat_id": chat_id, "text": f"Барлығы: {total}"}, timeout=8)
-            return jsonify({"ok": True})
-
     except Exception as e:
         logger.exception("Main webhook handler exception: %s", e)
+        # try to notify admin
         try:
             requests.post(telegram_api_url(BOT_TOKEN, "sendMessage"),
-                          json={"chat_id": chat_id, "text": "Серверде қате пайда болды. Админге хабарлаңыз."}, timeout=8)
+                          json={"chat_id": chat_id if 'chat_id' in locals() else 0,
+                                "text": "Серверде қате пайда болды. Админге хабарлаңыз."}, timeout=8)
         except Exception:
             pass
         return jsonify({"ok": False, "error": "exception"}), 500
@@ -696,8 +863,11 @@ try:
         set_main_webhook()
 except Exception:
     logger.exception("startup set_main_webhook error")
-    info = requests.get(telegram_api_url(BOT_TOKEN, "getWebhookInfo")).json()
-    logger.info(f"Webhook info: {json.dumps(info, ensure_ascii=False, indent=2)}")
+    try:
+        info = requests.get(telegram_api_url(BOT_TOKEN, "getWebhookInfo")).json()
+        logger.info(f"Webhook info: {json.dumps(info, ensure_ascii=False, indent=2)}")
+    except Exception:
+        pass
 
 # ------------- Run Flask -------------
 if __name__ == "__main__":
