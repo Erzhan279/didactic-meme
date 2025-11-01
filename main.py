@@ -367,12 +367,10 @@ def main_bot_webhook():
     if not update:
         return jsonify({"ok": False, "error": "invalid json"}), 400
     try:
-    message = update.get("message") or update.get("edited_message") or {}
-    logger.info(f"📨 Incoming message: {json.dumps(message, ensure_ascii=False)[:300]}")
-except Exception as e:
-    logger.exception(f"⚠️ Қате пайда болды: {e}")
-        if not message:
-            return jsonify({"ok": True, "info": "no-message"})
+        message = update.get("message") or update.get("edited_message") or {}
+        logger.info(f"📨 Incoming message: {json.dumps(message, ensure_ascii=False)[:300]}")
+    except Exception as e:
+        logger.exception(f"⚠️ Қате пайда болды: {e}")
 
         chat = message.get("chat", {})
         chat_id = chat.get("id")
